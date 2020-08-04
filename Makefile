@@ -68,6 +68,7 @@ OBJ_GPU = $(addprefix $(OBJDIR)/, $(addprefix gpu-, $(notdir $(addsuffix .o, $(C
 
 # Top level rules
 all: sort
+c_all: clean all
 
 sort: $(OBJ_GPU) $(CUDA_OBJ) $(CUDA_OBJ_FILES)
 	$(GPP) $(FLAGS) -o sort $(INCLUDE) $^ $(LIBS) 

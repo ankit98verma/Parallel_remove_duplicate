@@ -29,6 +29,7 @@ void export_gpu_outputs(bool verbose);
 int * cpu_arr;
 unsigned int arr_len;
 int * gpu_out_arr;
+unsigned int  out_arr_len;
 
 /* Definitions for time profiling the GPU program */
 cudaEvent_t start;
@@ -92,19 +93,22 @@ void time_profile_gpu(bool verbose){
 
     /* Sort the array */
 	START_TIMER();
-		cudacall_merge_sort();
+        out_arr_len = cudacall_remove_duplicates();
 	STOP_RECORD_TIMER(gpu_time_sorting);
+    cout << "Resulting length: "<< out_arr_len << endl;
     err = cudaGetLastError();
     if (cudaSuccess != err){
         cerr << "Error " << cudaGetErrorString(err) << endl;
+        return;
     }else{
     	if(verbose)
         	cerr << "No kernel error detected" << endl;
     }
+    gpu_out_arr = (int *)malloc(out_arr_len*sizeof(int));
 
     /* Copy the result to the CPU memory */
     START_TIMER();
-		cuda_cpy_output_data(gpu_out_arr, arr_len);
+		cuda_cpy_output_data(gpu_out_arr);
 	STOP_RECORD_TIMER(gpu_time_outdata_cpy);
 
 	if(verbose){
@@ -131,12 +135,12 @@ void time_profile_gpu(bool verbose){
 void init_vars(unsigned int len){
 	arr_len = len;
     cpu_arr = (int *)malloc(arr_len*sizeof(float));
-    gpu_out_arr = (int *)malloc(arr_len*sizeof(int));
+
     
     /* Randomly generate integers b/w 0 to 100 */
     srand(0);
     for(unsigned int i = 0; i<arr_len; i++){
-        cpu_arr[i] = rand()%100;
+        cpu_arr[i] = rand()%15;
     }
 }
 
@@ -198,7 +202,7 @@ void export_gpu_outputs(bool verbose){
     obj_stream2.open(filename2);
     obj_stream2 << "array" << endl;
     cout <<"-----------------------" << endl;
-    for(unsigned int i=0; i< arr_len; i++){
+    for(unsigned int i=0; i< out_arr_len; i++){
         obj_stream2 << gpu_out_arr[i] << endl;
     }
     obj_stream2.close();

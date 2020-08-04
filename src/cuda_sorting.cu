@@ -17,12 +17,22 @@ int ind2_arr;			// stores the index of the pointers_arrs which points to the mos
 int * dev_arr;			// it contains the array to be sorted in the device memory (GPU memory)
 int * dev_arr_cpy;		// a copy for the array to be sorted in the device memory (GPU memory)
 
+
+int * pointers_inds[2];	// the pointer to contain the address of the array and its copy
+int ind2_inds;			// stores the index of the pointers_arrs which points to the most updated array
+int * dev_arr_inds;			// it contains the array to be sorted in the device memory (GPU memory)
+int * dev_arr_inds_cpy;		// a copy for the array to be sorted in the device memory (GPU memory)
+int * dev_arr_inds_cpy2;	// another copy for indices of faces in the device memory (GPU memory)
 int arr_length;			// the length of the array
+int out_arr_length;		// lenght of output array
 
 /* Local functions */
 __device__ void get_first_greatest(int * arr, int len, int a, int * res_fg);
 __device__ void get_last_smallest(int * arr, int len, int a, int * res_ls);
-
+__global__ void kernel_mark_duplicates(int * arr, int * ind_res, const unsigned int length);
+__global__ void kernel_count_shifts(int * inds, int * inds_res, int length);
+__global__ void kernel_prefix_sum(int * inds, int * inds_res, const unsigned int length, const unsigned int stride);
+__global__ void kernel_fill_arr(int * arr_in, int * arr_out, int * inds, int * shifts, const unsigned int length);
 /*******************************************************************************
  * Function:        cuda_cpy_input_data
  *
@@ -40,10 +50,18 @@ void cuda_cpy_input_data(int * in_arr, unsigned int length){
 	CUDA_CALL(cudaMalloc((void**) &dev_arr, arr_length * sizeof(int)));
 	CUDA_CALL(cudaMalloc((void**) &dev_arr_cpy, arr_length* sizeof(int)));
 
+	CUDA_CALL(cudaMalloc((void**) &dev_arr_inds, arr_length * sizeof(int)));
+	CUDA_CALL(cudaMalloc((void**) &dev_arr_inds_cpy, arr_length* sizeof(int)));
+	CUDA_CALL(cudaMalloc((void**) &dev_arr_inds_cpy2, arr_length * sizeof(int)));
+
 	// set the pointer
 	pointers_arrs[0] = dev_arr;	
 	pointers_arrs[1] = dev_arr_cpy;
 	ind2_arr = 0;						// set the index denoting the latest array to 0
+
+	pointers_inds[0] = dev_arr_inds;	
+	pointers_inds[1] = dev_arr_inds_cpy;
+	ind2_inds = 0;
 
 	// copy input to the GPU memory
 	CUDA_CALL(cudaMemcpy(dev_arr, in_arr, arr_length*sizeof(int), cudaMemcpyHostToDevice));
@@ -61,8 +79,8 @@ void cuda_cpy_input_data(int * in_arr, unsigned int length){
  *
  * Return Values:   None
 *******************************************************************************/
-void cuda_cpy_output_data(int * out_arr, unsigned int length){
-	CUDA_CALL(cudaMemcpy(out_arr, pointers_arrs[ind2_arr], length*sizeof(int), cudaMemcpyDeviceToHost));
+void cuda_cpy_output_data(int * out_arr){
+	CUDA_CALL(cudaMemcpy(out_arr, pointers_arrs[ind2_arr], out_arr_length*sizeof(int), cudaMemcpyDeviceToHost));
 	
 }
 
@@ -79,6 +97,10 @@ void free_gpu_memory(){
 	
 	CUDA_CALL(cudaFree(dev_arr));
 	CUDA_CALL(cudaFree(dev_arr_cpy));
+
+	CUDA_CALL(cudaFree(dev_arr_inds));
+	CUDA_CALL(cudaFree(dev_arr_inds_cpy));
+	CUDA_CALL(cudaFree(dev_arr_inds_cpy2));
 }
 
 
@@ -328,7 +350,7 @@ void kernel_merge_chuncks(int * arr, int * res, const unsigned int length, const
 }
 
 /*******************************************************************************
- * Function:        cudacall_fill_vertices
+ * Function:        cudacall_merge_sort
  *
  * Description:     This calls the optimized sorting algorithms.
  *
@@ -340,7 +362,7 @@ void kernel_merge_chuncks(int * arr, int * res, const unsigned int length, const
  *
  * Return Values:   None
 *******************************************************************************/
-void cudacall_merge_sort() {
+int cudacall_remove_duplicates() {
 	int thread_num = GPU_THREAD_NUM;
 	unsigned int len = arr_length;
 	int n_blocks = min(65535, (len + thread_num  - 1) / thread_num);
@@ -364,6 +386,40 @@ void cudacall_merge_sort() {
 		unsigned int r = pow(2, i+1)*1024;
 		kernel_merge_chuncks<<<n_blocks, thread_num>>>(pointers_arrs[ind1], pointers_arrs[ind2_arr], len, r);
 	}
+
+	// now mark the duplicates
+	kernel_mark_duplicates<<<n_blocks, thread_num>>>(pointers_arrs[ind2_arr], pointers_inds[ind2_inds], len);
+
+	int * markers = pointers_inds[ind2_inds];
+
+	int out = (ind2_inds + 1)%2;
+	kernel_count_shifts<<<n_blocks, thread_num>>>(pointers_inds[ind2_inds], pointers_inds[out], len);
+	pointers_inds[ind2_inds] = dev_arr_inds_cpy2;
+	ind2_inds = out;
+
+	// commutate the shifts required.
+	l = ceil(log2(len));
+	for(int i=0; i<l; i++){
+		ind1 = ind2_inds;
+		ind2_inds = (ind2_inds+1)%2;
+		unsigned int r = pow(2, i);
+		kernel_prefix_sum<<<n_blocks, thread_num>>>(pointers_inds[ind1], pointers_inds[ind2_inds], len, r);
+	}
+
+	// find the length of the reuslting array;
+	// fill the vertices now
+	int * res_inds = pointers_inds[ind2_inds];
+	int * res_len = (int *)malloc(sizeof(int));
+
+	CUDA_CALL(cudaMemcpy(res_len, &res_inds[len-1], sizeof(int), cudaMemcpyDeviceToHost));
+
+	ind1 = ind2_arr;
+	ind2_arr = (ind2_arr + 1) % 2;
+	kernel_fill_arr<<<n_blocks, thread_num>>>(pointers_arrs[ind1], pointers_arrs[ind2_arr], markers, pointers_inds[ind2_inds], len);
+
+	out_arr_length = len - *res_len;
+	free(res_len);
+	return out_arr_length;
 }
 
 
@@ -432,4 +488,145 @@ void get_last_smallest(int * arr, int len, int a, int * res_ls){
 			first = mid + 1;
 	}
 	res_ls[0] = first - 1 < 0 ? -1 : first - 1;
+}
+
+
+/*******************************************************************************
+ * Function:        kernel_mark_duplicates todo
+ *
+ * Description:     This kernel marks the indices of the duplicate elements in
+ * 					the sorted array of vertices "v". Since the array is sorted 
+ * 					each array with respect to the sum of components of the vertex, 
+ * 					each thread finds the last index till which the sum of components
+ * 					of vertex equals its own. Then the thread loop from its location
+ * 					till the end location it found and compare all the is component 
+ * 					with other vertices as it loops over. If there already exists 
+ * 					one vertice with same component it puts the value -1 at the 
+ * 					ind_res[idx] location.
+ *
+ * Arguments:       int * arr: The array containing the sorted array
+ * 					int * ind_res: The array to which the markings will be stored
+ * 					const unsigned int length: The length of array of vertices which is equal to 
+ *								that of sums, and inds
+ *
+ * Return Values:   None
+*******************************************************************************/
+__global__
+void kernel_mark_duplicates(int * arr, int * ind_res, const unsigned int length){
+	unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const unsigned int numthrds = blockDim.x * gridDim.x;
+	
+	while(idx < length){
+		ind_res[idx] = idx;
+		if(idx + 1 < length){
+			if(arr[idx] == arr[idx+1]){
+				ind_res[idx] = -1;
+			}
+		}
+		idx += numthrds;
+	}
+}
+
+/*******************************************************************************
+ * Function:        kernel_count_shifts
+ *
+ * Description:     This kernel counts the shift required to remove the
+ *					duplicate elements.
+ *
+ * Arguments:       int * inds: The array containing marking of the duplicate elements
+ * 					int * inds_res: The array to which the required shift will be written
+ * 					int length: The length of array of inds and inds_res
+ *
+ * Return Values:   None
+*******************************************************************************/
+__global__
+void kernel_count_shifts(int * inds, int * inds_res, int length){
+	unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const unsigned int numthrds = blockDim.x * gridDim.x;
+	
+	int i, j;
+	while(idx < length){
+		if(inds[idx] == -1){
+			inds_res[idx] = 0; 
+		}
+		else{
+			i = idx - 1;
+			j=0;
+			while(i >= 0){
+				i--;
+				j++;
+				if(inds[i] != -1){
+					break;
+				}
+			}
+			inds_res[idx] = j;
+		}
+		
+		idx += numthrds;
+	}
+}
+
+/*******************************************************************************
+ * Function:        kernel_prefix_sum
+ *
+ * Description:     This kernel compute the prefix sum of the array using 
+ * 					the scanning algorithm,
+ *
+ * Arguments:       int * inds: The array whose prefix sum is to be found
+ * 					int * inds_res: The array to which the result is stored.
+ * 					int length: The length of array of inds and inds_res
+ *					the stride: The stride to be uesd for current step of the 
+ *								prefix sum.
+ *
+ * Return Values:   None
+*******************************************************************************/
+__global__
+void kernel_prefix_sum(int * inds, int * inds_res, const unsigned int length, const unsigned int stride){
+	
+	unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const unsigned int numthrds = blockDim.x * gridDim.x;
+	int i;
+	while(idx < length){
+		// find the end location
+		i = idx-stride;
+		if(i >= 0){
+			inds_res[idx] = inds[idx] + inds[i];
+		}else{
+			inds_res[idx] = inds[idx];
+		}
+		
+		idx += numthrds;
+	}
+}
+
+/*******************************************************************************
+ * Function:        kernel_fill_arr
+ *
+ * Description:     This kernel fills the v_out with the unique vertices using
+ *					the inds and shifts array.
+ *
+ * Arguments:       int * v_in: The array containing the duplicate vertices
+ * 					int * v_out: The array which will contain the unique vertices
+ * 					int * inds: The array containing the markers of duplicate and
+ *									unique elements
+ *					int * shifts: The array containing the shift required for the
+ * 									unique elements to be put into the v_out.
+ *					int length: Length of v_in, inds, and shifts arrays.
+ *
+ * Return Values:   None
+*******************************************************************************/
+__global__ 
+void kernel_fill_arr(int * arr_in, int * arr_out, int * inds, int * shifts, const unsigned int length){
+	
+	unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const unsigned int numthrds = blockDim.x * gridDim.x;
+	
+	int index;
+	while(idx < length){
+		if(inds[idx] != -1){
+			index = idx - shifts[idx];
+			arr_out[index] = arr_in[idx];   
+		}
+		idx += numthrds;
+	}
 }
