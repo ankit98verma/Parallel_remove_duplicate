@@ -10,21 +10,20 @@
 
 #include "cuda_sorting.cuh"
 
-
 /* Local variables */
 int * pointers_arrs[2];	// the pointer to contain the address of the array and its copy
 int ind2_arr;			// stores the index of the pointers_arrs which points to the most updated array
-int * dev_arr;			// it contains the array to be sorted in the device memory (GPU memory)
-int * dev_arr_cpy;		// a copy for the array to be sorted in the device memory (GPU memory)
+int * dev_arr;			// it contains the input array in the device memory (GPU memory)
+int * dev_arr_cpy;		// a copy for the input array in the device memory (GPU memory)
 
 
 int * pointers_inds[2];	// the pointer to contain the address of the array and its copy
 int ind2_inds;			// stores the index of the pointers_arrs which points to the most updated array
-int * dev_arr_inds;			// it contains the array to be sorted in the device memory (GPU memory)
-int * dev_arr_inds_cpy;		// a copy for the array to be sorted in the device memory (GPU memory)
-int * dev_arr_inds_cpy2;	// another copy for indices of faces in the device memory (GPU memory)
+int * dev_arr_inds;			// it contains indices of the input array in the device memory (GPU memory)
+int * dev_arr_inds_cpy;		// a copy for indices of the input array in the device memory (GPU memory)
+int * dev_arr_inds_cpy2;	// another copy for indices of the input array in the device memory (GPU memory)
 int arr_length;			// the length of the array
-int out_arr_length;		// lenght of output array
+int out_arr_length;		// length of output array (array with no duplicate elements)
 
 /* Local functions */
 __device__ void get_first_greatest(int * arr, int len, int a, int * res_fg);
@@ -57,12 +56,13 @@ void cuda_cpy_input_data(int * in_arr, unsigned int length){
 	// set the pointer
 	pointers_arrs[0] = dev_arr;	
 	pointers_arrs[1] = dev_arr_cpy;
-	ind2_arr = 0;						// set the index denoting the latest array to 0
+	ind2_arr = 0;		// set the index denoting the latest array to 0
 
 	pointers_inds[0] = dev_arr_inds;	
 	pointers_inds[1] = dev_arr_inds_cpy;
 	ind2_inds = 0;
 
+	out_arr_length = -1;
 	// copy input to the GPU memory
 	CUDA_CALL(cudaMemcpy(dev_arr, in_arr, arr_length*sizeof(int), cudaMemcpyHostToDevice));
 
@@ -75,13 +75,15 @@ void cuda_cpy_input_data(int * in_arr, unsigned int length){
  *
  * Arguments:       int * out_arr: The array to which the GPU result is to be 
  *										copied.
- *					unsigned int length: The length of the array.
  *
- * Return Values:   None
+ * Return Values:   It returns 1 if the output is copied else -1.
 *******************************************************************************/
-void cuda_cpy_output_data(int * out_arr){
-	CUDA_CALL(cudaMemcpy(out_arr, pointers_arrs[ind2_arr], out_arr_length*sizeof(int), cudaMemcpyDeviceToHost));
-	
+int cuda_cpy_output_data(int * out_arr){
+	if(out_arr_length == -1){
+		return -1;
+	}
+	CUDA_CALL(cudaMemcpy(out_arr, pointers_arrs[ind2_arr], out_arr_length*sizeof(int), cudaMemcpyDeviceToHost));	
+	return 1;
 }
 
 /*******************************************************************************
@@ -352,11 +354,19 @@ void kernel_merge_chuncks(int * arr, int * res, const unsigned int length, const
 /*******************************************************************************
  * Function:        cudacall_merge_sort
  *
- * Description:     This calls the optimized sorting algorithms.
+ * Description:     This calls the various CUDA kernals to remove duplicate 
+ *					elemtents from the array.
  *
- * 					The order the sequential implementation of this algorithm is: O(Log(n)^2)
- * 					The order the parallel implementation of this algorithm is: O(Log(n)^2/m)
+ *					The order of sorting array is: O(log(n)^2/m). 
+ *					The order of marking of duplicate elements: O(n/m);
+ *					The order of counting required shift is: O(n*d/m);
+ *					The order of prefix sum is: O(log(n)/m);
+ *					
+ * 					The order the parallel implementation of this algorithm is
+ *					: O(Log(n)^2/m) + O(n/m) + O(n*d/m) + O(log(n)/m) = O(n*d/m)
+ *	 
  * 					where m: no. of parallel running processors
+ * 					where d: maximum no. of duplicates present
  *
  * Arguments:       None
  *
@@ -390,9 +400,13 @@ int cudacall_remove_duplicates() {
 	// now mark the duplicates
 	kernel_mark_duplicates<<<n_blocks, thread_num>>>(pointers_arrs[ind2_arr], pointers_inds[ind2_inds], len);
 
+	// save a pointer to the array containing the marker
 	int * markers = pointers_inds[ind2_inds];
 
 	int out = (ind2_inds + 1)%2;
+
+	// count the no. of shifts required for each element assuming that the 
+	// the previous element is not shifted.
 	kernel_count_shifts<<<n_blocks, thread_num>>>(pointers_inds[ind2_inds], pointers_inds[out], len);
 	pointers_inds[ind2_inds] = dev_arr_inds_cpy2;
 	ind2_inds = out;
@@ -415,6 +429,8 @@ int cudacall_remove_duplicates() {
 
 	ind1 = ind2_arr;
 	ind2_arr = (ind2_arr + 1) % 2;
+
+	// fill the output array in proper order.
 	kernel_fill_arr<<<n_blocks, thread_num>>>(pointers_arrs[ind1], pointers_arrs[ind2_arr], markers, pointers_inds[ind2_inds], len);
 
 	out_arr_length = len - *res_len;
@@ -495,19 +511,14 @@ void get_last_smallest(int * arr, int len, int a, int * res_ls){
  * Function:        kernel_mark_duplicates todo
  *
  * Description:     This kernel marks the indices of the duplicate elements in
- * 					the sorted array of vertices "v". Since the array is sorted 
- * 					each array with respect to the sum of components of the vertex, 
- * 					each thread finds the last index till which the sum of components
- * 					of vertex equals its own. Then the thread loop from its location
- * 					till the end location it found and compare all the is component 
- * 					with other vertices as it loops over. If there already exists 
- * 					one vertice with same component it puts the value -1 at the 
- * 					ind_res[idx] location.
+ * 					the sorted array of arr. Each thread compares its value with
+ * 					the one with next element. If the values are equal then 
+ *					the index is marked as -1 otherwise nothing is changed.
  *
  * Arguments:       int * arr: The array containing the sorted array
  * 					int * ind_res: The array to which the markings will be stored
- * 					const unsigned int length: The length of array of vertices which is equal to 
- *								that of sums, and inds
+ * 					const unsigned int length: The length of input array and
+ *												 ind_res.
  *
  * Return Values:   None
 *******************************************************************************/
@@ -531,7 +542,8 @@ void kernel_mark_duplicates(int * arr, int * ind_res, const unsigned int length)
  * Function:        kernel_count_shifts
  *
  * Description:     This kernel counts the shift required to remove the
- *					duplicate elements.
+ *					duplicate elements. Assuming that the previous unique element
+ *					has not been shifted.
  *
  * Arguments:       int * inds: The array containing marking of the duplicate elements
  * 					int * inds_res: The array to which the required shift will be written
@@ -602,16 +614,16 @@ void kernel_prefix_sum(int * inds, int * inds_res, const unsigned int length, co
 /*******************************************************************************
  * Function:        kernel_fill_arr
  *
- * Description:     This kernel fills the v_out with the unique vertices using
+ * Description:     This kernel fills the arr_out with the unique values using
  *					the inds and shifts array.
  *
- * Arguments:       int * v_in: The array containing the duplicate vertices
- * 					int * v_out: The array which will contain the unique vertices
+ * Arguments:       int * arr_in: The array containing the duplicate values
+ * 					int * arr_out: The array which will contain the unique values
  * 					int * inds: The array containing the markers of duplicate and
  *									unique elements
- *					int * shifts: The array containing the shift required for the
- * 									unique elements to be put into the v_out.
- *					int length: Length of v_in, inds, and shifts arrays.
+ *					int * shifts: The array containing the shift required for each
+ * 									unique elements to be put into the arr_out.
+ *					int length: Length of arr_in, inds, and shifts arrays.
  *
  * Return Values:   None
 *******************************************************************************/

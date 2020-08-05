@@ -18,7 +18,7 @@ void cuda_cpy_input_data(int * in_arr, unsigned int length);
 
 int cudacall_remove_duplicates();
 
-void cuda_cpy_output_data(int * out_arr);
+int cuda_cpy_output_data(int * out_arr);
 
 void free_gpu_memory();
 

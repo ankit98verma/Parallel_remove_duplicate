@@ -3,8 +3,9 @@
  *
  * Ankit Verma, 2020
  *
- * This file runs the merge sorting on GPU
- *
+ * This file removes the duplicate items from randomly generated array using the
+ * GPU
+ * 
  */
 
 /* C++ includes */
@@ -91,11 +92,10 @@ void time_profile_gpu(bool verbose){
 	STOP_RECORD_TIMER(gpu_time_indata_cpy);
 
 
-    /* Sort the array */
+    /* remove the duplicate elemtents from the array */
 	START_TIMER();
         out_arr_len = cudacall_remove_duplicates();
 	STOP_RECORD_TIMER(gpu_time_sorting);
-    cout << "Resulting length: "<< out_arr_len << endl;
     err = cudaGetLastError();
     if (cudaSuccess != err){
         cerr << "Error " << cudaGetErrorString(err) << endl;
@@ -104,6 +104,8 @@ void time_profile_gpu(bool verbose){
     	if(verbose)
         	cerr << "No kernel error detected" << endl;
     }
+    
+    cout << "Resulting length: "<< out_arr_len << endl;
     gpu_out_arr = (int *)malloc(out_arr_len*sizeof(int));
 
     /* Copy the result to the CPU memory */
@@ -113,9 +115,10 @@ void time_profile_gpu(bool verbose){
 
 	if(verbose){
 		printf("GPU Input data copy time: %f ms\n", gpu_time_indata_cpy);
-	    printf("GPU Sorting time: %f ms\n", gpu_time_sorting);
+	    printf("GPU remove duplicates time: %f ms\n", gpu_time_sorting);
 		printf("GPU Output data copy time: %f ms\n", gpu_time_outdata_cpy);
-		printf("Total GPU time: %f ms\n",gpu_time_indata_cpy+ gpu_time_sorting + gpu_time_outdata_cpy );
+		printf("Total GPU time: %f ms\n",gpu_time_indata_cpy+ gpu_time_sorting 
+                + gpu_time_outdata_cpy );
 	}
 }
 
@@ -147,11 +150,13 @@ void init_vars(unsigned int len){
 /*******************************************************************************
  * Function:        main
  *
- * Description:     Run the main function
+ * Description:     Runs the main function. It generates a random array of given
+ *                  size and remove duplicate elements and time profiles the GPU
+ *                  operation.
  *
  * Arguments:       int argc, char argv
  *
- * Return Values:   int 1 if code executes successfully else 0.
+ * Return Values:   int: 1 if code executes successfully else 0.
 *******************************************************************************/
 int main(int argc, char **argv) {
 
