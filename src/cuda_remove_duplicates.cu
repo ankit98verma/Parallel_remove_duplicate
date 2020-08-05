@@ -8,7 +8,7 @@
 	#define _GRAV_CUDA_ICOSPHERE_CU_
 #endif
 
-#include "cuda_sorting.cuh"
+#include "cuda_remove_duplicates.cuh"
 
 /* Local variables */
 int * pointers_arrs[2];	// the pointer to contain the address of the array and its copy

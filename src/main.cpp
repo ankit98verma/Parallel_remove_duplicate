@@ -17,7 +17,7 @@
 
 /* Cuda includes */
 #include <cuda_runtime.h>
-#include "cuda_sorting.cuh"
+#include "cuda_remove_duplicates.cuh"
 
 
 using namespace std;

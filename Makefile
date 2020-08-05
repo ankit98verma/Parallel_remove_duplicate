@@ -11,7 +11,7 @@ OBJDIR = bin
 CUDA_OBJ = $(OBJDIR)/cuda.o
 
 # Input Names
-CUDA_FILES = src/cuda_sorting.cu
+CUDA_FILES = src/cuda_remove_duplicates.cu
 CPP_FILES =  src/main.cpp
 
 # ------------------------------------------------------------------------------
