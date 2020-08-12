@@ -1,4 +1,4 @@
-# Parallel duplicate removal sort
+# Parallel duplicate removal
 
 This repository implements the parallel removal of duplicate elements from an array on CUDA. As an example, if the input to the program is: 
 ```C++
